@@ -35,4 +35,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Run the application using app.py (Hugging Face compatible entry point)
-CMD ["python", "app.py"]
+CMD ["python", "run.py"]
