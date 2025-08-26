@@ -35,7 +35,9 @@ async def openai_chat_completions(
     """
     
     try:
-        logging.info(f"OpenAI chat completion request: model={request.model}, stream={request.stream}")
+        # --- [修改] 日志格式 ---
+        stream_text = "Yes" if request.stream else "No"
+        logging.info(f"Request received for model '{request.model}' (Streaming: {stream_text})")
         
         # Transform OpenAI request to Gemini format
         gemini_request_data = openai_request_to_gemini(request)
@@ -64,8 +66,8 @@ async def openai_chat_completions(
                 response = send_gemini_request(gemini_payload, is_streaming=True)
                 
                 if isinstance(response, StreamingResponse):
-                    response_id = "chatcmpl-" + str(uuid.uuid4())
-                    logging.info(f"Starting streaming response: {response_id}")
+                    # --- [修改] 日志格式 ---
+                    logging.info(f"Connection to Google API established, starting stream...")
                     
                     async for chunk in response.body_iterator:
                         if isinstance(chunk, bytes):
@@ -96,7 +98,7 @@ async def openai_chat_completions(
                                 openai_chunk = gemini_stream_chunk_to_openai(
                                     gemini_chunk,
                                     request.model,
-                                    response_id
+                                    "id-placeholder" # Placeholder as ID is not needed per log change
                                 )
                                 
                                 # Send as OpenAI streaming format
@@ -109,7 +111,8 @@ async def openai_chat_completions(
                     
                     # Send the final [DONE] marker
                     yield "data: [DONE]\n\n"
-                    logging.info(f"Completed streaming response: {response_id}")
+                    # --- [修改] 日志格式 ---
+                    logging.info(f"Stream response completed.")
                 else:
                     # Error case - handle Response object with error
                     error_msg = "Streaming request failed"
@@ -248,7 +251,8 @@ async def openai_list_models(username: str = Depends(authenticate_user)):
     """
     
     try:
-        logging.info("OpenAI models list requested")
+        # --- [修改] 日志格式 ---
+        logging.info("Model list requested.")
         
         # Convert our Gemini models to OpenAI format
         from .config import SUPPORTED_MODELS
@@ -282,7 +286,8 @@ async def openai_list_models(username: str = Depends(authenticate_user)):
                 "parent": None
             })
         
-        logging.info(f"Returning {len(openai_models)} models")
+        # --- [修改] 日志格式 ---
+        logging.info(f"Returning {len(openai_models)} available models.")
         return {
             "object": "list",
             "data": openai_models
@@ -301,5 +306,3 @@ async def openai_list_models(username: str = Depends(authenticate_user)):
             status_code=500,
             media_type="application/json"
         )
-
-
