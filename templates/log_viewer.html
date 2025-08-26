@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>API Log Stream</title>
+    <style>
+        body { font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; margin: 0; padding: 20px; }
+        #log-container { white-space: pre-wrap; word-wrap: break-word; }
+        .log-info { color: #a6e22e; }
+        .log-error { color: #f92672; font-weight: bold; }
+        .log-warning { color: #f4bf75; }
+        .log-default { color: #d4d4d4; }
+    </style>
+</head>
+<body>
+    <h1>Real-time API Log</h1>
+    <div id="log-container"></div>
+    <script>
+        const logContainer = document.getElementById('log-container');
+        const socket = new WebSocket(`ws://${window.location.host}/ws/logs`);
+
+        socket.onopen = function(event) {
+            console.log("WebSocket connection established.");
+            const p = document.createElement('p');
+            p.textContent = "--> Connection to log stream established. Waiting for logs...";
+            p.className = 'log-info';
+            logContainer.appendChild(p);
+        };
+
+        socket.onmessage = function(event) {
+            const message = event.data;
+            const p = document.createElement('p');
+            p.textContent = message;
+
+            if (message.includes("ERROR")) {
+                p.className = 'log-error';
+            } else if (message.includes("WARNING")) {
+                p.className = 'log-warning';
+            } else if (message.includes("INFO")) {
+                p.className = 'log-info';
+            } else {
+                p.className = 'log-default';
+            }
+            
+            logContainer.appendChild(p);
+            window.scrollTo(0, document.body.scrollHeight); // Auto-scroll to bottom
+        };
+
+        socket.onclose = function(event) {
+            console.error('WebSocket connection closed.');
+            const p = document.createElement('p');
+            p.textContent = "--> WebSocket connection closed. Please refresh the page to reconnect.";
+            p.className = 'log-error';
+            logContainer.appendChild(p);
+        };
+    </script>
+</body>
+</html>
