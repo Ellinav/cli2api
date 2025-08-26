@@ -1,148 +1,99 @@
 import logging
-import os
-from datetime import datetime, timezone  # <--- 新增: 导入时间和时区模块
-from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from typing import List
+
+# --- 1. WebSocket 连接管理器 ---
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            await connection.send_text(message)
+
+manager = ConnectionManager()
+
+# --- 2. 自定义日志处理器，将日志发送到 WebSocket ---
+class WebSocketLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.loop = asyncio.get_event_loop()
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        
+        # 在这里过滤不想要的日志
+        if "/health" in log_entry or "/favicon.ico" in log_entry:
+            return
+            
+        # 通过 manager 将格式化后的日志广播给所有连接的客户端
+        asyncio.run_coroutine_threadsafe(manager.broadcast(log_entry), self.loop)
+
+# --- 3. 配置日志 ---
+# 获取根日志记录器
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# 移除所有现有的处理器，避免日志重复
+for handler in logger.handlers[:]:
+    logger.removeHandler(handler)
+
+# 添加我们自定义的 WebSocket 处理器
+ws_handler = WebSocketLogHandler()
+ws_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+logger.addHandler(ws_handler)
+
+# 同时，为了在容器的标准输出中也能看到日志，我们再添加一个 StreamHandler
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+logger.addHandler(stream_handler)
+
+
+# --- 4. FastAPI 应用主体 ---
+# 注意：我们将原来的大部分代码移到下面，以确保日志配置先被应用
 from .gemini_routes import router as gemini_router
 from .openai_routes import router as openai_router
-from .auth import get_credentials, get_user_project_id, onboard_user
-
-# Load environment variables from .env file
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    logging.info("Environment variables loaded from .env file")
-except ImportError:
-    logging.warning("python-dotenv not installed, .env file will not be loaded automatically")
-except Exception as e:
-    logging.warning(f"Could not load .env file: {e}")
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 
 app = FastAPI()
 
-# Add CORS middleware for preflight requests
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
-)
-
-@app.on_event("startup")
-async def startup_event():
-    try:
-        logging.info("Starting Gemini proxy server...")
-
-        # Check if credentials exist
-        import os
-        from .config import CREDENTIAL_FILE
-
-        env_creds_json = os.getenv("GEMINI_CREDENTIALS")
-        creds_file_exists = os.path.exists(CREDENTIAL_FILE)
-
-        if env_creds_json or creds_file_exists:
-            try:
-                # Try to load existing credentials without OAuth flow first
-                creds = get_credentials(allow_oauth_flow=False)
-                if creds:
-                    try:
-                        proj_id = get_user_project_id(creds)
-                        if proj_id:
-                            onboard_user(creds, proj_id)
-                            logging.info(f"Successfully onboarded with project ID: {proj_id}")
-                        logging.info("Gemini proxy server started successfully")
-                        logging.info("Authentication required - Password: see .env file")
-                    except Exception as e:
-                        logging.error(f"Setup failed: {str(e)}")
-                        logging.warning("Server started but may not function properly until setup issues are resolved.")
-                else:
-                    logging.warning("Credentials file exists but could not be loaded. Server started - authentication will be required on first request.")
-            except Exception as e:
-                logging.error(f"Credential loading error: {str(e)}")
-                logging.warning("Server started but credentials need to be set up.")
-        else:
-            # No credentials found - prompt user to authenticate
-            logging.info("No credentials found. Starting OAuth authentication flow...")
-            try:
-                creds = get_credentials(allow_oauth_flow=True)
-                if creds:
-                    try:
-                        proj_id = get_user_project_id(creds)
-                        if proj_id:
-                            onboard_user(creds, proj_id)
-                            logging.info(f"Successfully onboarded with project ID: {proj_id}")
-                        logging.info("Gemini proxy server started successfully")
-                    except Exception as e:
-                        logging.error(f"Setup failed: {str(e)}")
-                        logging.warning("Server started but may not function properly until setup issues are resolved.")
-                else:
-                    logging.error("Authentication failed. Server started but will not function until credentials are provided.")
-            except Exception as e:
-                logging.error(f"Authentication error: {str(e)}")
-                logging.warning("Server started but authentication failed.")
-
-        logging.info("Authentication required - Password: see .env file")
-
-    except Exception as e:
-        logging.error(f"Startup error: {str(e)}")
-        logging.warning("Server may not function properly.")
-
-@app.options("/{full_path:path}")
-async def handle_preflight(request: Request, full_path: str):
-    """Handle CORS preflight requests without authentication."""
-    return Response(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Allow-Credentials": "true",
-        }
-    )
-
-# Root endpoint - no authentication required
 @app.get("/")
-async def root():
-    """
-    Root endpoint providing project information.
-    No authentication required.
-    """
-    # <--- 从这里开始是修改的部分 ---
-    return {
-        "status": "online",
-        "server_time_utc": datetime.now(timezone.utc).isoformat(),
-        "name": "geminicli2api",
-        "description": "OpenAI-compatible API proxy for Google's Gemini models via gemini-cli",
-        "purpose": "Provides both OpenAI-compatible endpoints (/v1/chat/completions) and native Gemini API endpoints for accessing Google's Gemini models",
-        "version": "1.0.0",
-        "endpoints": {
-            "openai_compatible": {
-                "chat_completions": "/v1/chat/completions",
-                "models": "/v1/models"
-            },
-            "native_gemini": {
-                "models": "/v1beta/models",
-                "generate": "/v1beta/models/{model}/generateContent",
-                "stream": "/v1beta/models/{model}/streamGenerateContent"
-            },
-            "health": "/health"
-        },
-        "authentication": "Required for all endpoints except root and health",
-        "repository": "https://github.com/user/geminicli2api"
-    }
-    # <--- 到这里结束修改 ---
+async def get_log_page():
+    # 这个端点现在返回我们创建的HTML文件
+    return FileResponse('templates/log_viewer.html')
 
-# Health check endpoint for Docker/Hugging Face
+@app.websocket("/ws/logs")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # 保持连接开放
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        logger.info("A client disconnected from the log stream.")
+
+
+# 健康检查端点
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for container orchestration."""
-    return {"status": "healthy", "service": "geminicli2api"}
+    return {"status": "healthy"}
 
+# 包含其他路由
 app.include_router(openai_router)
 app.include_router(gemini_router)
+
+
+# 在应用启动时打印信息
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Application startup complete. Ready to accept requests.")
+    logger.info("Visit the root URL '/' in a browser to view the real-time log stream.")
