@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime, timezone  # <--- 新增: 导入时间和时区模块
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from .gemini_routes import router as gemini_router
@@ -37,14 +38,14 @@ app.add_middleware(
 async def startup_event():
     try:
         logging.info("Starting Gemini proxy server...")
-        
+
         # Check if credentials exist
         import os
         from .config import CREDENTIAL_FILE
-        
+
         env_creds_json = os.getenv("GEMINI_CREDENTIALS")
         creds_file_exists = os.path.exists(CREDENTIAL_FILE)
-        
+
         if env_creds_json or creds_file_exists:
             try:
                 # Try to load existing credentials without OAuth flow first
@@ -85,9 +86,9 @@ async def startup_event():
             except Exception as e:
                 logging.error(f"Authentication error: {str(e)}")
                 logging.warning("Server started but authentication failed.")
-        
+
         logging.info("Authentication required - Password: see .env file")
-        
+
     except Exception as e:
         logging.error(f"Startup error: {str(e)}")
         logging.warning("Server may not function properly.")
@@ -112,7 +113,10 @@ async def root():
     Root endpoint providing project information.
     No authentication required.
     """
+    # <--- 从这里开始是修改的部分 ---
     return {
+        "status": "online",
+        "server_time_utc": datetime.now(timezone.utc).isoformat(),
         "name": "geminicli2api",
         "description": "OpenAI-compatible API proxy for Google's Gemini models via gemini-cli",
         "purpose": "Provides both OpenAI-compatible endpoints (/v1/chat/completions) and native Gemini API endpoints for accessing Google's Gemini models",
@@ -132,6 +136,7 @@ async def root():
         "authentication": "Required for all endpoints except root and health",
         "repository": "https://github.com/user/geminicli2api"
     }
+    # <--- 到这里结束修改 ---
 
 # Health check endpoint for Docker/Hugging Face
 @app.get("/health")
