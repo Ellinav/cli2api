@@ -60,7 +60,7 @@ def setup_logging():
     
 setup_logging()
 
-# --- 4. FastAPI 应用主体 (与上一版相同) ---
+# --- 4. FastAPI 应用主体 ---
 from .gemini_routes import router as gemini_router
 from .openai_routes import router as openai_router
 
